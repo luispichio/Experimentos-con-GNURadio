@@ -1,0 +1,181 @@
+options:
+  parameters:
+    author: Luis / OpenAI Codex
+    catch_exceptions: 'True'
+    category: '[Examples]'
+    description: FreeDV 2400B receiver for a VHF FM handheld radio
+    generate_options: qt_gui
+    id: freedv_2400b_rx
+    output_language: python
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: prompt
+    title: FreeDV 2400B - RX para HT VHF
+  states:
+    coordinate: [8, 8]
+    state: enabled
+
+blocks:
+- name: audio_in
+  id: parameter
+  parameters:
+    label: Dispositivo desde el HT
+    type: str
+    value: "''"
+  states:
+    coordinate: [16, 16]
+    state: enabled
+- name: audio_out
+  id: parameter
+  parameters:
+    label: Dispositivo de escucha
+    type: str
+    value: "''"
+  states:
+    coordinate: [16, 72]
+    state: enabled
+- name: audio_rate
+  id: variable
+  parameters:
+    value: '48000'
+  states:
+    coordinate: [224, 16]
+    state: enabled
+- name: rx_gain
+  id: variable_qtgui_range
+  parameters:
+    label: Ganancia de entrada RX
+    rangeType: float
+    start: '0.05'
+    stop: '4.0'
+    step: '0.05'
+    value: '1.0'
+    widget: counter_slider
+  states:
+    coordinate: [344, 16]
+    state: enabled
+- name: squelch_enable
+  id: variable_qtgui_check_box
+  parameters:
+    label: Squelch FreeDV
+    type: bool
+    value: 'True'
+    'true': 'True'
+    'false': 'False'
+  states:
+    coordinate: [552, 16]
+    state: enabled
+- name: squelch_thresh
+  id: variable_qtgui_range
+  parameters:
+    label: Umbral de squelch (dB)
+    rangeType: float
+    start: '-5.0'
+    stop: '20.0'
+    step: '0.5'
+    value: '2.0'
+    widget: counter_slider
+  states:
+    coordinate: [712, 16]
+    state: enabled
+- name: audio_source_0
+  id: audio_source
+  parameters:
+    device_name: audio_in
+    num_outputs: '1'
+    ok_to_block: 'True'
+    samp_rate: audio_rate
+  states:
+    coordinate: [16, 192]
+    state: enabled
+- name: blocks_multiply_const_vxx_0
+  id: blocks_multiply_const_vxx
+  parameters:
+    const: rx_gain
+    type: float
+    vlen: '1'
+  states:
+    coordinate: [168, 192]
+    state: enabled
+- name: blocks_float_to_short_0
+  id: blocks_float_to_short
+  parameters:
+    scale: '32767'
+    vlen: '1'
+  states:
+    coordinate: [352, 192]
+    state: enabled
+- name: vocoder_freedv_rx_ss_0
+  id: vocoder_freedv_rx_ss
+  parameters:
+    interleave_frames: '1'
+    mode: freedv_api.MODE_2400B
+    squelch_enable: squelch_enable
+    squelch_thresh: squelch_thresh
+  states:
+    coordinate: [512, 192]
+    state: enabled
+- name: blocks_short_to_float_0
+  id: blocks_short_to_float
+  parameters:
+    scale: '32768'
+    vlen: '1'
+  states:
+    coordinate: [704, 192]
+    state: enabled
+- name: rational_resampler_xxx_0
+  id: rational_resampler_xxx
+  parameters:
+    decim: '1'
+    fbw: '0.4'
+    interp: '6'
+    taps: '[]'
+    type: fff
+  states:
+    coordinate: [864, 192]
+    state: enabled
+- name: audio_sink_0
+  id: audio_sink
+  parameters:
+    device_name: audio_out
+    ok_to_block: 'True'
+    samp_rate: audio_rate
+  states:
+    coordinate: [1040, 192]
+    state: enabled
+- name: qtgui_freq_sink_x_0
+  id: qtgui_freq_sink_x
+  parameters:
+    bw: audio_rate
+    fc: '0'
+    fftsize: '2048'
+    name: "'Espectro recibido desde el HT'"
+    nconnections: '1'
+    type: float
+  states:
+    coordinate: [168, 320]
+    state: enabled
+- name: qtgui_time_sink_x_0
+  id: qtgui_time_sink_x
+  parameters:
+    name: "'Voz FreeDV decodificada'"
+    nconnections: '1'
+    size: '2048'
+    srate: audio_rate
+    type: float
+  states:
+    coordinate: [864, 320]
+    state: enabled
+
+connections:
+- [audio_source_0, '0', blocks_multiply_const_vxx_0, '0']
+- [blocks_multiply_const_vxx_0, '0', blocks_float_to_short_0, '0']
+- [blocks_multiply_const_vxx_0, '0', qtgui_freq_sink_x_0, '0']
+- [blocks_float_to_short_0, '0', vocoder_freedv_rx_ss_0, '0']
+- [vocoder_freedv_rx_ss_0, '0', blocks_short_to_float_0, '0']
+- [blocks_short_to_float_0, '0', rational_resampler_xxx_0, '0']
+- [rational_resampler_xxx_0, '0', audio_sink_0, '0']
+- [rational_resampler_xxx_0, '0', qtgui_time_sink_x_0, '0']
+
+metadata:
+  file_format: 1
