@@ -4,8 +4,16 @@
 import os
 import termios
 import unittest
+from types import SimpleNamespace
 
-from freedv_2400b_trx import DtrPtt, PttStateMachine
+from freedv_2400b_trx import (
+    DtrPtt,
+    PttStateMachine,
+    discover_alsa_device_details,
+    discover_alsa_devices,
+    parse_alsa_device_details,
+    parse_alsa_devices,
+)
 
 
 class FakeTimer:
@@ -93,6 +101,64 @@ class DtrBackendTest(unittest.TestCase):
         self.assertEqual(calls[-1], ("close", 17))
 
 
+class AlsaDiscoveryTest(unittest.TestCase):
+    def test_parse_alsa_devices_uses_only_pcm_names(self):
+        output = """default
+    Default Audio Device
+front:CARD=Headset,DEV=0
+    Headset, USB Audio
+default
+    Duplicate default
+"""
+        self.assertEqual(
+            parse_alsa_devices(output),
+            ["default", "front:CARD=Headset,DEV=0"],
+        )
+
+    def test_discover_alsa_devices_returns_default_when_command_fails(self):
+        def failed_run(*_args, **_kwargs):
+            raise OSError("arecord no encontrado")
+
+        self.assertEqual(discover_alsa_devices("arecord", failed_run), ["default"])
+
+    def test_discover_alsa_devices_invokes_list_option(self):
+        calls = []
+
+        def fake_run(*args, **kwargs):
+            calls.append((args, kwargs))
+            return SimpleNamespace(stdout="null\n    Discard samples\n")
+
+        self.assertEqual(discover_alsa_devices("aplay", fake_run), ["default", "null"])
+        self.assertEqual(calls[0][0][0], ["aplay", "-L"])
+
+    def test_parse_alsa_device_details_includes_readable_names(self):
+        output = """pulse
+    PulseAudio Sound Server
+hw:CARD=Pro,DEV=0
+    SB X-Fi Surround 5.1 Pro, USB Audio
+default:CARD=Pro
+    SB X-Fi Surround 5.1 Pro, USB Audio
+"""
+        self.assertEqual(
+            parse_alsa_device_details(output),
+            [
+                ("default:CARD=Pro", "SB X-Fi Surround 5.1 Pro, USB Audio"),
+                ("hw:CARD=Pro,DEV=0", "SB X-Fi Surround 5.1 Pro, USB Audio"),
+                ("default", "Dispositivo predeterminado del sistema"),
+                ("pulse", "PulseAudio Sound Server"),
+            ],
+        )
+
+    def test_discover_alsa_device_details_has_default_on_error(self):
+        def failed_run(*_args, **_kwargs):
+            raise OSError("aplay no encontrado")
+
+        self.assertEqual(
+            discover_alsa_device_details("aplay", failed_run),
+            [("default", "Dispositivo predeterminado del sistema")],
+        )
+
+
 class PttStateMachineTest(unittest.TestCase):
     def setUp(self):
         self.events = []
@@ -166,6 +232,14 @@ class PttStateMachineTest(unittest.TestCase):
         self.assertEqual(self.ptt.state, PttStateMachine.CLOSED)
         self.assertFalse(self.dtr.connected)
         self.assertNotIn(("tx_audio", True), self.events)
+
+    def test_cancel_tx_unkeys_without_waiting_for_tail(self):
+        self.ptt.press()
+        self.scheduler.fire_last()
+        self.ptt.cancel_tx()
+        self.assertEqual(self.ptt.state, PttStateMachine.RX)
+        self.assertEqual(self.dtr.events[-1], ("dtr", False))
+        self.assertIn(("tx_audio", False), self.events)
 
 
 if __name__ == "__main__":

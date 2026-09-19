@@ -7,6 +7,7 @@ import fcntl
 import glob
 import os
 import signal
+import subprocess
 import sys
 import termios
 
@@ -34,6 +35,81 @@ def discover_serial_devices():
             if device not in devices:
                 devices.append(device)
     return devices
+
+
+def parse_alsa_devices(output):
+    """Extract ALSA PCM names from the output of aplay/arecord -L."""
+    devices = ["default"]
+    for line in output.splitlines():
+        if not line or line[0].isspace():
+            continue
+        device = line.strip()
+        if device and device not in devices:
+            devices.append(device)
+    return devices
+
+
+def parse_alsa_device_details(output):
+    """Return ALSA PCM names paired with their first human-readable description."""
+    devices = []
+    current_name = None
+    current_description = ""
+    for line in output.splitlines():
+        if line and not line[0].isspace():
+            if current_name is not None:
+                devices.append((current_name, current_description))
+            current_name = line.strip()
+            current_description = ""
+        elif current_name is not None and line.strip() and not current_description:
+            current_description = line.strip()
+    if current_name is not None:
+        devices.append((current_name, current_description))
+    if not any(name == "default" for name, _description in devices):
+        devices.insert(0, ("default", "Dispositivo predeterminado del sistema"))
+
+    unique_devices = []
+    seen = set()
+    for name, description in devices:
+        if name not in seen:
+            unique_devices.append((name, description))
+            seen.add(name)
+    return sorted(
+        unique_devices,
+        key=lambda device: (
+            0 if "CARD=" in device[0] else 1 if device[0] == "default" else 2,
+            device[0],
+        ),
+    )
+
+
+def discover_alsa_devices(command, run=subprocess.run):
+    """Return ALSA PCM names, retaining the default device if discovery fails."""
+    try:
+        result = run(
+            [command, "-L"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return ["default"]
+    return parse_alsa_devices(result.stdout)
+
+
+def discover_alsa_device_details(command, run=subprocess.run):
+    """Return ALSA PCM names and labels, retaining a usable default on errors."""
+    try:
+        result = run(
+            [command, "-L"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return [("default", "Dispositivo predeterminado del sistema")]
+    return parse_alsa_device_details(result.stdout)
 
 
 class DtrPtt:
@@ -200,6 +276,21 @@ class PttStateMachine:
         self._set_state(self.TAIL)
         self._timer = self.scheduler.call_later(self.tail_ms, self._finish_tail)
 
+    def cancel_tx(self):
+        """Immediately unkey DTR before stopping the audio flowgraph."""
+        self._held = False
+        self._cancel_timer()
+        self.set_tx_audio(False)
+        if not self.dtr.connected:
+            self.set_rx_audio(True)
+            return
+        try:
+            self.dtr.set_tx(False)
+            self.set_rx_audio(True)
+            self._set_state(self.RX, self.dtr.device or "")
+        except BaseException as exc:
+            self._fail(exc)
+
     def _finish_tail(self):
         self._timer = None
         try:
@@ -256,9 +347,15 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
         self._tx_audio_enabled = False
         self._rx_audio_enabled = True
         self._shutdown_done = False
+        self.audio_running = False
+        self.mic_in = mic_in
+        self.speaker_out = speaker_out
+        self.radio_in = radio_in
+        self.radio_out = radio_out
+        self._dsp_blocks = []
+        self.spectrum_widget = None
 
         self._build_layout()
-        self._build_dsp(mic_in, speaker_out, radio_in, radio_out)
 
         self.dtr = dtr or DtrPtt()
         self.ptt = PttStateMachine(
@@ -271,6 +368,7 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
             self._show_state,
         )
 
+        self.refresh_audio_devices()
         self.refresh_serial_devices(ptt_device)
         Qt.QApplication.instance().installEventFilter(self)
         Qt.QApplication.instance().applicationStateChanged.connect(
@@ -281,6 +379,40 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
 
     def _build_layout(self):
         root = Qt.QVBoxLayout(self)
+
+        audio_grid = Qt.QGridLayout()
+        audio_grid.addWidget(Qt.QLabel("Micrófono operador:"), 0, 0)
+        self.mic_in_combo = Qt.QComboBox()
+        self.mic_in_combo.setEditable(True)
+        audio_grid.addWidget(self.mic_in_combo, 0, 1)
+        audio_grid.addWidget(Qt.QLabel("Auriculares operador:"), 1, 0)
+        self.speaker_out_combo = Qt.QComboBox()
+        self.speaker_out_combo.setEditable(True)
+        audio_grid.addWidget(self.speaker_out_combo, 1, 1)
+        audio_grid.addWidget(Qt.QLabel("Entrada desde HT:"), 2, 0)
+        self.radio_in_combo = Qt.QComboBox()
+        self.radio_in_combo.setEditable(True)
+        audio_grid.addWidget(self.radio_in_combo, 2, 1)
+        audio_grid.addWidget(Qt.QLabel("Salida hacia HT:"), 3, 0)
+        self.radio_out_combo = Qt.QComboBox()
+        self.radio_out_combo.setEditable(True)
+        audio_grid.addWidget(self.radio_out_combo, 3, 1)
+        root.addLayout(audio_grid)
+
+        audio_buttons = Qt.QHBoxLayout()
+        self.audio_refresh_button = Qt.QPushButton("Actualizar audio")
+        self.audio_refresh_button.clicked.connect(self.refresh_audio_devices)
+        audio_buttons.addWidget(self.audio_refresh_button)
+        self.audio_start_button = Qt.QPushButton("Iniciar audio")
+        self.audio_start_button.clicked.connect(self.start_audio)
+        audio_buttons.addWidget(self.audio_start_button)
+        self.audio_stop_button = Qt.QPushButton("Detener audio")
+        self.audio_stop_button.clicked.connect(self.stop_audio)
+        audio_buttons.addWidget(self.audio_stop_button)
+        root.addLayout(audio_buttons)
+
+        self.audio_status_label = Qt.QLabel("Audio detenido")
+        root.addWidget(self.audio_status_label)
 
         serial_row = Qt.QHBoxLayout()
         serial_row.addWidget(Qt.QLabel("PTT USB CDC:"))
@@ -364,6 +496,7 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
 
         self.main_layout = root
         self._show_state(PttStateMachine.DISCONNECTED)
+        self._update_audio_controls()
 
     def _build_dsp(self, mic_in, speaker_out, radio_in, radio_out):
         # TX: operator microphone -> Codec2/FreeDV -> radio audio output.
@@ -436,9 +569,125 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
         self.spectrum.set_line_color(1, "red")
         self.spectrum.enable_grid(True)
         spectrum_widget = sip.wrapinstance(self.spectrum.qwidget(), Qt.QWidget)
+        self.spectrum_widget = spectrum_widget
         self.main_layout.addWidget(spectrum_widget, 1)
         self.connect(self.rx_level, (self.spectrum, 0))
         self.connect(self.tx_gate, (self.spectrum, 1))
+        self._dsp_blocks = [
+            self.mic_source, self.tx_resampler, self.tx_float_to_short,
+            self.freedv_tx, self.tx_short_to_float, self.tx_level,
+            self.tx_gate, self.radio_sink, self.radio_source, self.rx_level,
+            self.rx_float_to_short, self.freedv_rx, self.rx_short_to_float,
+            self.rx_resampler, self.monitor_level, self.monitor_gate,
+            self.speaker_sink, self.spectrum,
+        ]
+
+    @staticmethod
+    def _set_combo_devices(combo, devices, selected):
+        combo.blockSignals(True)
+        combo.clear()
+        for device, description in devices:
+            label = device if not description else f"{device} - {description}"
+            combo.addItem(label, device)
+        if selected:
+            index = combo.findData(selected)
+            if index < 0:
+                combo.addItem(selected, selected)
+                index = combo.count() - 1
+            combo.setCurrentIndex(index)
+        else:
+            combo.setCurrentIndex(combo.findData("default"))
+        combo.blockSignals(False)
+
+    @staticmethod
+    def _combo_device(combo):
+        text = combo.currentText().strip()
+        if text != combo.itemText(combo.currentIndex()):
+            return text
+        return combo.currentData() or text
+
+    def refresh_audio_devices(self):
+        if self.audio_running:
+            return
+        capture_devices = discover_alsa_device_details("arecord")
+        playback_devices = discover_alsa_device_details("aplay")
+        self._set_combo_devices(
+            self.mic_in_combo, capture_devices, self._combo_device(self.mic_in_combo) or self.mic_in
+        )
+        self._set_combo_devices(
+            self.radio_in_combo, capture_devices,
+            self._combo_device(self.radio_in_combo) or self.radio_in,
+        )
+        self._set_combo_devices(
+            self.speaker_out_combo, playback_devices,
+            self._combo_device(self.speaker_out_combo) or self.speaker_out,
+        )
+        self._set_combo_devices(
+            self.radio_out_combo, playback_devices,
+            self._combo_device(self.radio_out_combo) or self.radio_out,
+        )
+
+    def _update_audio_controls(self):
+        editable = not self.audio_running
+        for combo in (
+            self.mic_in_combo, self.speaker_out_combo,
+            self.radio_in_combo, self.radio_out_combo,
+        ):
+            combo.setEnabled(editable)
+        self.audio_refresh_button.setEnabled(editable)
+        self.audio_start_button.setEnabled(editable)
+        self.audio_stop_button.setEnabled(self.audio_running)
+        connected = getattr(self, "ptt", None) and self.ptt.state in {
+            PttStateMachine.RX, PttStateMachine.PREKEY,
+            PttStateMachine.TX, PttStateMachine.TAIL,
+        }
+        self.ptt_button.setEnabled(bool(connected and self.audio_running))
+
+    def start_audio(self):
+        if self.audio_running:
+            return
+        self.mic_in = self._combo_device(self.mic_in_combo)
+        self.speaker_out = self._combo_device(self.speaker_out_combo)
+        self.radio_in = self._combo_device(self.radio_in_combo)
+        self.radio_out = self._combo_device(self.radio_out_combo)
+        try:
+            self._build_dsp(self.mic_in, self.speaker_out, self.radio_in, self.radio_out)
+            self.start()
+        except BaseException as exc:
+            self._clear_dsp()
+            self.audio_status_label.setText(f"Error de audio: {exc}")
+            return
+        self.audio_running = True
+        self.audio_status_label.setText("Audio activo")
+        self._update_audio_controls()
+
+    def _clear_dsp(self):
+        self.disconnect_all()
+        if self.spectrum_widget is not None:
+            self.main_layout.removeWidget(self.spectrum_widget)
+            self.spectrum_widget.deleteLater()
+            self.spectrum_widget = None
+        self._dsp_blocks.clear()
+        for name in (
+            "mic_source", "tx_resampler", "tx_float_to_short", "freedv_tx",
+            "tx_short_to_float", "tx_level", "tx_gate", "radio_sink",
+            "radio_source", "rx_level", "rx_float_to_short", "freedv_rx",
+            "rx_short_to_float", "rx_resampler", "monitor_level", "monitor_gate",
+            "speaker_sink", "spectrum",
+        ):
+            if hasattr(self, name):
+                delattr(self, name)
+
+    def stop_audio(self):
+        if not self.audio_running:
+            return
+        self.ptt.cancel_tx()
+        self.stop()
+        self.wait()
+        self._clear_dsp()
+        self.audio_running = False
+        self.audio_status_label.setText("Audio detenido")
+        self._update_audio_controls()
 
     def refresh_serial_devices(self, preferred=None):
         current = preferred or self.serial_combo.currentText().strip()
@@ -526,8 +775,9 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
             PttStateMachine.TX,
             PttStateMachine.TAIL,
         }
-        self.ptt_button.setEnabled(connected)
         self.connect_button.setText("Desconectar" if connected else "Conectar")
+        if hasattr(self, "audio_start_button"):
+            self._update_audio_controls()
 
     def eventFilter(self, obj, event):
         if event.type() == QtCore.QEvent.KeyPress:
@@ -548,9 +798,8 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
         if self._shutdown_done:
             return
         self._shutdown_done = True
+        self.stop_audio()
         self.ptt.close()
-        self.stop()
-        self.wait()
 
     def closeEvent(self, event):
         self.shutdown()
@@ -561,10 +810,10 @@ def argument_parser():
     parser = argparse.ArgumentParser(
         description="FreeDV 2400B half-duplex TRX with DTR PTT"
     )
-    parser.add_argument("--mic-in", default="hw:CARD=Headset,DEV=0")
-    parser.add_argument("--speaker-out", default="default:CARD=Headset")
-    parser.add_argument("--radio-in", default="hw:CARD=Pro,DEV=0")
-    parser.add_argument("--radio-out", default="default:CARD=Pro")
+    parser.add_argument("--mic-in", default="")
+    parser.add_argument("--speaker-out", default="")
+    parser.add_argument("--radio-in", default="")
+    parser.add_argument("--radio-out", default="")
     parser.add_argument("--ptt-device")
     parser.add_argument("--ptt-lead-ms", type=int, default=250)
     parser.add_argument("--ptt-tail-ms", type=int, default=150)
@@ -583,7 +832,6 @@ def main(options=None):
         ptt_lead_ms=options.ptt_lead_ms,
         ptt_tail_ms=options.ptt_tail_ms,
     )
-    top.start()
     top.show()
 
     def stop_application(*_args):

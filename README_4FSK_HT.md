@@ -141,7 +141,14 @@ Headset MIC -> FreeDV TX -> salida de la interfaz de radio -> MIC del HT
 SPK del HT -> entrada de la interfaz de radio -> FreeDV RX -> Headset SPK
 ```
 
-Ejemplo con los nombres de dispositivo predeterminados:
+Al abrir el transceptor, selecciona las cuatro interfaces ALSA antes de pulsar
+**Iniciar audio**. Los selectores se llenan con `arecord -L` para las entradas y
+`aplay -L` para las salidas e incluyen el nombre legible de cada placa. También
+aceptan nombres ALSA escritos manualmente.
+Mientras el audio está activo la selección queda bloqueada. Pulsa **Detener
+audio** para liberar las interfaces y poder cambiarlas.
+
+También se pueden preseleccionar desde la línea de comandos:
 
 ```bash
 python3 freedv_2400b_trx.py \
