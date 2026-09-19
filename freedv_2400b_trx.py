@@ -378,26 +378,87 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
             QtCore.QTimer.singleShot(0, self.toggle_serial_connection)
 
     def _build_layout(self):
+        self.resize(1024, 600)
+        self.setMinimumSize(800, 480)
         root = Qt.QVBoxLayout(self)
+        root.setContentsMargins(6, 6, 6, 6)
+        root.setSpacing(0)
+
+        self.main_splitter = Qt.QSplitter(QtCore.Qt.Horizontal)
+        self.main_splitter.setChildrenCollapsible(False)
+        root.addWidget(self.main_splitter)
+
+        self.controls_scroll = Qt.QScrollArea()
+        self.controls_scroll.setWidgetResizable(True)
+        self.controls_scroll.setFrameShape(Qt.QFrame.NoFrame)
+        # Keep enough width for the widest GNU Radio range control without clipping.
+        self.controls_scroll.setMinimumWidth(400)
+        self.controls_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        controls_widget = Qt.QWidget()
+        controls_widget.setSizePolicy(
+            Qt.QSizePolicy.Expanding, Qt.QSizePolicy.Minimum
+        )
+        controls = Qt.QVBoxLayout(controls_widget)
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(4)
+        self.controls_scroll.setWidget(controls_widget)
+        self.main_splitter.addWidget(self.controls_scroll)
+
+        spectrum_panel = Qt.QWidget()
+        spectrum_panel.setMinimumWidth(300)
+        self.main_layout = Qt.QVBoxLayout(spectrum_panel)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.spectrum_placeholder = Qt.QLabel("Inicie el audio para mostrar el espectro")
+        self.spectrum_placeholder.setAlignment(QtCore.Qt.AlignCenter)
+        self.main_layout.addWidget(self.spectrum_placeholder)
+        self.main_splitter.addWidget(spectrum_panel)
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setSizes([430, 580])
 
         audio_grid = Qt.QGridLayout()
+        audio_grid.setHorizontalSpacing(4)
+        audio_grid.setVerticalSpacing(2)
+        audio_grid.setColumnStretch(1, 1)
         audio_grid.addWidget(Qt.QLabel("Micrófono operador:"), 0, 0)
         self.mic_in_combo = Qt.QComboBox()
         self.mic_in_combo.setEditable(True)
+        self.mic_in_combo.setMinimumContentsLength(8)
+        self.mic_in_combo.setSizeAdjustPolicy(
+            Qt.QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.mic_in_combo.setSizePolicy(Qt.QSizePolicy.Expanding, Qt.QSizePolicy.Fixed)
         audio_grid.addWidget(self.mic_in_combo, 0, 1)
         audio_grid.addWidget(Qt.QLabel("Auriculares operador:"), 1, 0)
         self.speaker_out_combo = Qt.QComboBox()
         self.speaker_out_combo.setEditable(True)
+        self.speaker_out_combo.setMinimumContentsLength(8)
+        self.speaker_out_combo.setSizeAdjustPolicy(
+            Qt.QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.speaker_out_combo.setSizePolicy(
+            Qt.QSizePolicy.Expanding, Qt.QSizePolicy.Fixed
+        )
         audio_grid.addWidget(self.speaker_out_combo, 1, 1)
         audio_grid.addWidget(Qt.QLabel("Entrada desde HT:"), 2, 0)
         self.radio_in_combo = Qt.QComboBox()
         self.radio_in_combo.setEditable(True)
+        self.radio_in_combo.setMinimumContentsLength(8)
+        self.radio_in_combo.setSizeAdjustPolicy(
+            Qt.QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.radio_in_combo.setSizePolicy(Qt.QSizePolicy.Expanding, Qt.QSizePolicy.Fixed)
         audio_grid.addWidget(self.radio_in_combo, 2, 1)
         audio_grid.addWidget(Qt.QLabel("Salida hacia HT:"), 3, 0)
         self.radio_out_combo = Qt.QComboBox()
         self.radio_out_combo.setEditable(True)
+        self.radio_out_combo.setMinimumContentsLength(8)
+        self.radio_out_combo.setSizeAdjustPolicy(
+            Qt.QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.radio_out_combo.setSizePolicy(Qt.QSizePolicy.Expanding, Qt.QSizePolicy.Fixed)
         audio_grid.addWidget(self.radio_out_combo, 3, 1)
-        root.addLayout(audio_grid)
+        controls.addLayout(audio_grid)
 
         audio_buttons = Qt.QHBoxLayout()
         self.audio_refresh_button = Qt.QPushButton("Actualizar audio")
@@ -409,35 +470,43 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
         self.audio_stop_button = Qt.QPushButton("Detener audio")
         self.audio_stop_button.clicked.connect(self.stop_audio)
         audio_buttons.addWidget(self.audio_stop_button)
-        root.addLayout(audio_buttons)
+        controls.addLayout(audio_buttons)
 
         self.audio_status_label = Qt.QLabel("Audio detenido")
-        root.addWidget(self.audio_status_label)
+        controls.addWidget(self.audio_status_label)
 
-        serial_row = Qt.QHBoxLayout()
-        serial_row.addWidget(Qt.QLabel("PTT USB CDC:"))
+        serial_grid = Qt.QGridLayout()
+        serial_grid.setHorizontalSpacing(4)
+        serial_grid.setVerticalSpacing(2)
+        serial_grid.addWidget(Qt.QLabel("PTT USB CDC:"), 0, 0)
         self.serial_combo = Qt.QComboBox()
         self.serial_combo.setEditable(True)
-        serial_row.addWidget(self.serial_combo, 1)
+        self.serial_combo.setMinimumContentsLength(8)
+        self.serial_combo.setSizeAdjustPolicy(
+            Qt.QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.serial_combo.setSizePolicy(Qt.QSizePolicy.Expanding, Qt.QSizePolicy.Fixed)
+        serial_grid.addWidget(self.serial_combo, 0, 1)
         refresh_button = Qt.QPushButton("Actualizar")
         refresh_button.clicked.connect(self.refresh_serial_devices)
-        serial_row.addWidget(refresh_button)
+        serial_grid.addWidget(refresh_button, 1, 0)
         self.connect_button = Qt.QPushButton("Conectar")
         self.connect_button.clicked.connect(self.toggle_serial_connection)
-        serial_row.addWidget(self.connect_button)
-        root.addLayout(serial_row)
+        serial_grid.addWidget(self.connect_button, 1, 1)
+        serial_grid.setColumnStretch(1, 1)
+        controls.addLayout(serial_grid)
 
         self.state_label = Qt.QLabel("DESCONECTADO")
         self.state_label.setAlignment(QtCore.Qt.AlignCenter)
-        self.state_label.setMinimumHeight(42)
-        root.addWidget(self.state_label)
+        self.state_label.setMinimumHeight(32)
+        controls.addWidget(self.state_label)
 
         self.ptt_button = Qt.QPushButton("MANTENER PARA TRANSMITIR\nPTT / ESPACIO")
-        self.ptt_button.setMinimumHeight(100)
+        self.ptt_button.setMinimumHeight(72)
         self.ptt_button.setEnabled(False)
         self.ptt_button.pressed.connect(self.ptt_pressed)
         self.ptt_button.released.connect(self.ptt_released)
-        root.addWidget(self.ptt_button)
+        controls.addWidget(self.ptt_button)
 
         self._tx_gain_range = qtgui.Range(0.0, 1.0, 0.01, self.tx_gain, 200)
         self._tx_gain_widget = qtgui.RangeWidget(
@@ -448,7 +517,7 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
             float,
             QtCore.Qt.Horizontal,
         )
-        root.addWidget(self._tx_gain_widget)
+        controls.addWidget(self._tx_gain_widget)
 
         self._rx_gain_range = qtgui.Range(0.05, 4.0, 0.05, self.rx_gain, 200)
         self._rx_gain_widget = qtgui.RangeWidget(
@@ -459,7 +528,7 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
             float,
             QtCore.Qt.Horizontal,
         )
-        root.addWidget(self._rx_gain_widget)
+        controls.addWidget(self._rx_gain_widget)
 
         self._monitor_gain_range = qtgui.Range(
             0.0, 2.0, 0.05, self.monitor_gain, 200
@@ -472,14 +541,22 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
             float,
             QtCore.Qt.Horizontal,
         )
-        root.addWidget(self._monitor_gain_widget)
+        controls.addWidget(self._monitor_gain_widget)
 
         squelch_row = Qt.QHBoxLayout()
         self.squelch_box = Qt.QCheckBox("Squelch FreeDV")
         self.squelch_box.setChecked(self.squelch_enable)
         self.squelch_box.toggled.connect(self.set_squelch_enable)
         squelch_row.addWidget(self.squelch_box)
-        root.addLayout(squelch_row)
+        self.squelch_threshold_button = Qt.QToolButton()
+        self.squelch_threshold_button.setText("Umbral")
+        self.squelch_threshold_button.setCheckable(True)
+        self.squelch_threshold_button.toggled.connect(
+            self._set_squelch_threshold_visible
+        )
+        squelch_row.addWidget(self.squelch_threshold_button)
+        squelch_row.addStretch()
+        controls.addLayout(squelch_row)
 
         self._squelch_range = qtgui.Range(
             -5.0, 20.0, 0.5, self.squelch_thresh, 200
@@ -492,11 +569,19 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
             float,
             QtCore.Qt.Horizontal,
         )
-        root.addWidget(self._squelch_widget)
+        self.squelch_threshold_widget = Qt.QWidget()
+        squelch_threshold_layout = Qt.QVBoxLayout(self.squelch_threshold_widget)
+        squelch_threshold_layout.setContentsMargins(0, 0, 0, 0)
+        squelch_threshold_layout.addWidget(self._squelch_widget)
+        self.squelch_threshold_widget.setVisible(False)
+        controls.addWidget(self.squelch_threshold_widget)
+        controls.addStretch()
 
-        self.main_layout = root
         self._show_state(PttStateMachine.DISCONNECTED)
         self._update_audio_controls()
+
+    def _set_squelch_threshold_visible(self, visible):
+        self.squelch_threshold_widget.setVisible(visible)
 
     def _build_dsp(self, mic_in, speaker_out, radio_in, radio_out):
         # TX: operator microphone -> Codec2/FreeDV -> radio audio output.
@@ -570,6 +655,8 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
         self.spectrum.enable_grid(True)
         spectrum_widget = sip.wrapinstance(self.spectrum.qwidget(), Qt.QWidget)
         self.spectrum_widget = spectrum_widget
+        self.main_layout.removeWidget(self.spectrum_placeholder)
+        self.spectrum_placeholder.hide()
         self.main_layout.addWidget(spectrum_widget, 1)
         self.connect(self.rx_level, (self.spectrum, 0))
         self.connect(self.tx_gate, (self.spectrum, 1))
@@ -667,6 +754,9 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
             self.main_layout.removeWidget(self.spectrum_widget)
             self.spectrum_widget.deleteLater()
             self.spectrum_widget = None
+        if self.main_layout.indexOf(self.spectrum_placeholder) < 0:
+            self.main_layout.addWidget(self.spectrum_placeholder)
+        self.spectrum_placeholder.show()
         self._dsp_blocks.clear()
         for name in (
             "mic_source", "tx_resampler", "tx_float_to_short", "freedv_tx",

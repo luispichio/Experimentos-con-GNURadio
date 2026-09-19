@@ -148,6 +148,12 @@ aceptan nombres ALSA escritos manualmente.
 Mientras el audio está activo la selección queda bloqueada. Pulsa **Detener
 audio** para liberar las interfaces y poder cambiarlas.
 
+La ventana está organizada para pantallas de 1024x600: los controles quedan a
+la izquierda y el espectro a la derecha; el divisor central permite ajustar el
+ancho de ambos paneles. En pantallas más bajas, la columna de
+controles permite desplazamiento y el ajuste del umbral de squelch se despliega
+con el botón **Umbral**.
+
 También se pueden preseleccionar desde la línea de comandos:
 
 ```bash
