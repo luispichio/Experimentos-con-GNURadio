@@ -15,11 +15,13 @@ from PyQt5 import Qt, QtCore
 from gnuradio import audio, blocks, filter, gr, qtgui, vocoder
 from gnuradio.fft import window
 from gnuradio.vocoder import freedv_api
+import pmt
 import sip
 
 
 AUDIO_RATE = 48_000
 SPEECH_RATE = 8_000
+MAX_FREEDV_TEXT_LENGTH = 80
 
 
 def discover_serial_devices():
@@ -110,6 +112,23 @@ def discover_alsa_device_details(command, run=subprocess.run):
     except (OSError, subprocess.CalledProcessError):
         return [("default", "Dispositivo predeterminado del sistema")]
     return parse_alsa_device_details(result.stdout)
+
+
+def normalize_freedv_text(text):
+    """Validate the cyclic low-rate FreeDV text sent with each transmission."""
+    text = str(text).replace("\r", " ").replace("\n", " ").strip()
+    try:
+        text.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("El texto FreeDV sólo admite caracteres ASCII") from exc
+    return text[:MAX_FREEDV_TEXT_LENGTH]
+
+
+def pmt_text_to_string(message):
+    """Convert the symbol emitted by freedv_rx_ss into display text."""
+    if pmt.is_symbol(message):
+        return pmt.symbol_to_string(message)
+    return pmt.write_string(message)
 
 
 class DtrPtt:
@@ -333,6 +352,7 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
         ptt_lead_ms=250,
         ptt_tail_ms=150,
         dtr=None,
+        tx_text="GNU Radio 2400B",
     ):
         gr.top_block.__init__(self, "FreeDV 2400B TRX", catch_exceptions=True)
         Qt.QWidget.__init__(self)
@@ -352,8 +372,12 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
         self.speaker_out = speaker_out
         self.radio_in = radio_in
         self.radio_out = radio_out
+        self.tx_text = normalize_freedv_text(tx_text)
         self._dsp_blocks = []
         self.spectrum_widget = None
+        self.voice_spectrum_widget = None
+        self.spectrum_splitter = None
+        self._rx_text_count = 0
 
         self._build_layout()
 
@@ -370,6 +394,9 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
 
         self.refresh_audio_devices()
         self.refresh_serial_devices(ptt_device)
+        self.rx_text_timer = QtCore.QTimer(self)
+        self.rx_text_timer.timeout.connect(self._drain_rx_text)
+        self.rx_text_timer.start(200)
         Qt.QApplication.instance().installEventFilter(self)
         Qt.QApplication.instance().applicationStateChanged.connect(
             self._application_state_changed
@@ -475,6 +502,23 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
         self.audio_status_label = Qt.QLabel("Audio detenido")
         controls.addWidget(self.audio_status_label)
 
+        tx_text_row = Qt.QHBoxLayout()
+        tx_text_row.addWidget(Qt.QLabel("Texto TX FreeDV:"))
+        self.tx_text_edit = Qt.QLineEdit(self.tx_text)
+        self.tx_text_edit.setMaxLength(MAX_FREEDV_TEXT_LENGTH)
+        self.tx_text_edit.setToolTip(
+            "Texto ASCII transmitido cíclicamente, por ejemplo su indicativo"
+        )
+        tx_text_row.addWidget(self.tx_text_edit, 1)
+        controls.addLayout(tx_text_row)
+
+        controls.addWidget(Qt.QLabel("Texto RX FreeDV:"))
+        self.rx_text_log = Qt.QPlainTextEdit()
+        self.rx_text_log.setReadOnly(True)
+        self.rx_text_log.setMaximumHeight(72)
+        self.rx_text_log.setPlaceholderText("Los mensajes FreeDV recibidos aparecerán aquí")
+        controls.addWidget(self.rx_text_log)
+
         serial_grid = Qt.QGridLayout()
         serial_grid.setHorizontalSpacing(4)
         serial_grid.setVerticalSpacing(2)
@@ -499,6 +543,7 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
         self.state_label = Qt.QLabel("DESCONECTADO")
         self.state_label.setAlignment(QtCore.Qt.AlignCenter)
         self.state_label.setMinimumHeight(32)
+        self.state_label.setSizePolicy(Qt.QSizePolicy.Ignored, Qt.QSizePolicy.Fixed)
         controls.addWidget(self.state_label)
 
         self.ptt_button = Qt.QPushButton("MANTENER PARA TRANSMITIR\nPTT / ESPACIO")
@@ -591,7 +636,7 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
         )
         self.tx_float_to_short = blocks.float_to_short(1, 32_767)
         self.freedv_tx = vocoder.freedv_tx_ss(
-            freedv_api.MODE_2400B, "GNU Radio 2400B", 1
+            freedv_api.MODE_2400B, self.tx_text, 1
         )
         self.tx_short_to_float = blocks.short_to_float(1, 32_768)
         self.tx_level = blocks.multiply_const_ff(self.tx_gain)
@@ -617,6 +662,9 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
             freedv_api.MODE_2400B, self.squelch_thresh, 1
         )
         self.freedv_rx.set_squelch_en(self.squelch_enable)
+        self.rx_text_debug = blocks.message_debug()
+        self.msg_connect((self.freedv_rx, "text"), (self.rx_text_debug, "store"))
+        self._rx_text_count = 0
         self.rx_short_to_float = blocks.short_to_float(1, 32_768)
         self.rx_resampler = filter.rational_resampler_fff(
             interpolation=6, decimation=1, taps=[], fractional_bw=0.4
@@ -655,18 +703,50 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
         self.spectrum.enable_grid(True)
         spectrum_widget = sip.wrapinstance(self.spectrum.qwidget(), Qt.QWidget)
         self.spectrum_widget = spectrum_widget
+
+        self.voice_spectrum = qtgui.freq_sink_f(
+            2048,
+            window.WIN_BLACKMAN_hARRIS,
+            0,
+            AUDIO_RATE,
+            "Voz de operador / FreeDV demodulado",
+            2,
+            None,
+        )
+        self.voice_spectrum.set_update_time(0.10)
+        self.voice_spectrum.set_y_axis(-120, 10)
+        self.voice_spectrum.set_line_label(0, "Micrófono operador")
+        self.voice_spectrum.set_line_label(1, "Voz FreeDV demodulada")
+        self.voice_spectrum.set_line_color(0, "green")
+        self.voice_spectrum.set_line_color(1, "magenta")
+        self.voice_spectrum.enable_grid(True)
+        voice_spectrum_widget = sip.wrapinstance(
+            self.voice_spectrum.qwidget(), Qt.QWidget
+        )
+        self.voice_spectrum_widget = voice_spectrum_widget
+
         self.main_layout.removeWidget(self.spectrum_placeholder)
         self.spectrum_placeholder.hide()
-        self.main_layout.addWidget(spectrum_widget, 1)
+        self.spectrum_splitter = Qt.QSplitter(QtCore.Qt.Vertical)
+        self.spectrum_splitter.setChildrenCollapsible(False)
+        self.spectrum_splitter.addWidget(spectrum_widget)
+        self.spectrum_splitter.addWidget(voice_spectrum_widget)
+        self.spectrum_splitter.setStretchFactor(0, 1)
+        self.spectrum_splitter.setStretchFactor(1, 1)
+        self.spectrum_splitter.setSizes([280, 280])
+        self.main_layout.addWidget(self.spectrum_splitter, 1)
         self.connect(self.rx_level, (self.spectrum, 0))
         self.connect(self.tx_gate, (self.spectrum, 1))
+        self.connect(self.mic_source, (self.voice_spectrum, 0))
+        self.connect(self.monitor_gate, (self.voice_spectrum, 1))
         self._dsp_blocks = [
             self.mic_source, self.tx_resampler, self.tx_float_to_short,
             self.freedv_tx, self.tx_short_to_float, self.tx_level,
             self.tx_gate, self.radio_sink, self.radio_source, self.rx_level,
             self.rx_float_to_short, self.freedv_rx, self.rx_short_to_float,
             self.rx_resampler, self.monitor_level, self.monitor_gate,
-            self.speaker_sink, self.spectrum,
+            self.speaker_sink, self.spectrum, self.voice_spectrum,
+            self.rx_text_debug,
         ]
 
     @staticmethod
@@ -724,6 +804,7 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
         self.audio_refresh_button.setEnabled(editable)
         self.audio_start_button.setEnabled(editable)
         self.audio_stop_button.setEnabled(self.audio_running)
+        self.tx_text_edit.setEnabled(editable)
         connected = getattr(self, "ptt", None) and self.ptt.state in {
             PttStateMachine.RX, PttStateMachine.PREKEY,
             PttStateMachine.TX, PttStateMachine.TAIL,
@@ -738,6 +819,8 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
         self.radio_in = self._combo_device(self.radio_in_combo)
         self.radio_out = self._combo_device(self.radio_out_combo)
         try:
+            self.tx_text = normalize_freedv_text(self.tx_text_edit.text())
+            self.tx_text_edit.setText(self.tx_text)
             self._build_dsp(self.mic_in, self.speaker_out, self.radio_in, self.radio_out)
             self.start()
         except BaseException as exc:
@@ -748,12 +831,24 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
         self.audio_status_label.setText("Audio activo")
         self._update_audio_controls()
 
+    def _drain_rx_text(self):
+        if not hasattr(self, "rx_text_debug"):
+            return
+        while self._rx_text_count < self.rx_text_debug.num_messages():
+            message = self.rx_text_debug.get_message(self._rx_text_count)
+            self._rx_text_count += 1
+            text = pmt_text_to_string(message)
+            if text:
+                self.rx_text_log.appendPlainText(text)
+
     def _clear_dsp(self):
         self.disconnect_all()
-        if self.spectrum_widget is not None:
-            self.main_layout.removeWidget(self.spectrum_widget)
-            self.spectrum_widget.deleteLater()
-            self.spectrum_widget = None
+        if self.spectrum_splitter is not None:
+            self.main_layout.removeWidget(self.spectrum_splitter)
+            self.spectrum_splitter.deleteLater()
+            self.spectrum_splitter = None
+        self.spectrum_widget = None
+        self.voice_spectrum_widget = None
         if self.main_layout.indexOf(self.spectrum_placeholder) < 0:
             self.main_layout.addWidget(self.spectrum_placeholder)
         self.spectrum_placeholder.show()
@@ -763,7 +858,7 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
             "tx_short_to_float", "tx_level", "tx_gate", "radio_sink",
             "radio_source", "rx_level", "rx_float_to_short", "freedv_rx",
             "rx_short_to_float", "rx_resampler", "monitor_level", "monitor_gate",
-            "speaker_sink", "spectrum",
+            "speaker_sink", "spectrum", "voice_spectrum", "rx_text_debug",
         ):
             if hasattr(self, name):
                 delattr(self, name)
@@ -853,8 +948,8 @@ class FreeDV2400BTrx(gr.top_block, Qt.QWidget):
             PttStateMachine.CLOSED: ("#333", "white"),
         }
         background, foreground = colors.get(state, ("#555", "white"))
-        text = state if not detail else f"{state} — {detail}"
-        self.state_label.setText(text)
+        self.state_label.setText(state)
+        self.state_label.setToolTip(detail)
         self.state_label.setStyleSheet(
             f"font-size: 18px; font-weight: bold; color: {foreground}; "
             f"background: {background}; padding: 6px;"
@@ -904,6 +999,7 @@ def argument_parser():
     parser.add_argument("--speaker-out", default="")
     parser.add_argument("--radio-in", default="")
     parser.add_argument("--radio-out", default="")
+    parser.add_argument("--tx-text", default="GNU Radio 2400B")
     parser.add_argument("--ptt-device")
     parser.add_argument("--ptt-lead-ms", type=int, default=250)
     parser.add_argument("--ptt-tail-ms", type=int, default=150)
@@ -918,6 +1014,7 @@ def main(options=None):
         speaker_out=options.speaker_out,
         radio_in=options.radio_in,
         radio_out=options.radio_out,
+        tx_text=options.tx_text,
         ptt_device=options.ptt_device,
         ptt_lead_ms=options.ptt_lead_ms,
         ptt_tail_ms=options.ptt_tail_ms,

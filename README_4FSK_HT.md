@@ -154,6 +154,13 @@ ancho de ambos paneles. En pantallas más bajas, la columna de
 controles permite desplazamiento y el ajuste del umbral de squelch se despliega
 con el botón **Umbral**.
 
+El panel derecho muestra dos espectros ajustables: la señal intercambiada con
+el HT y la voz de micrófono junto con la voz FreeDV demodulada. El campo
+**Texto TX FreeDV** transmite cíclicamente un texto ASCII de hasta 80 caracteres
+(por ejemplo, indicativo y ubicación). El historial **Texto RX FreeDV** muestra
+los mensajes recibidos. El texto TX se aplica al iniciar audio; para cambiarlo,
+detén e inicia nuevamente el audio.
+
 También se pueden preseleccionar desde la línea de comandos:
 
 ```bash
@@ -161,7 +168,8 @@ python3 freedv_2400b_trx.py \
   --mic-in 'hw:CARD=Headset,DEV=0' \
   --speaker-out 'default:CARD=Headset' \
   --radio-in 'hw:CARD=Pro,DEV=0' \
-  --radio-out 'default:CARD=Pro'
+  --radio-out 'default:CARD=Pro' \
+  --tx-text 'LU1ABC LOC GF00'
 ```
 
 La lista **PTT USB CDC** busca primero nombres estables en

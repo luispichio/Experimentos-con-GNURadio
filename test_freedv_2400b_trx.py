@@ -6,13 +6,18 @@ import termios
 import unittest
 from types import SimpleNamespace
 
+import pmt
+
 from freedv_2400b_trx import (
     DtrPtt,
     PttStateMachine,
     discover_alsa_device_details,
     discover_alsa_devices,
+    MAX_FREEDV_TEXT_LENGTH,
+    normalize_freedv_text,
     parse_alsa_device_details,
     parse_alsa_devices,
+    pmt_text_to_string,
 )
 
 
@@ -157,6 +162,22 @@ default:CARD=Pro
             discover_alsa_device_details("aplay", failed_run),
             [("default", "Dispositivo predeterminado del sistema")],
         )
+
+
+class FreeDVTextTest(unittest.TestCase):
+    def test_normalize_freedv_text_is_ascii_and_limited(self):
+        self.assertEqual(normalize_freedv_text("  LU1ABC\n"), "LU1ABC")
+        self.assertEqual(
+            normalize_freedv_text("A" * (MAX_FREEDV_TEXT_LENGTH + 1)),
+            "A" * MAX_FREEDV_TEXT_LENGTH,
+        )
+
+    def test_normalize_freedv_text_rejects_non_ascii(self):
+        with self.assertRaises(ValueError):
+            normalize_freedv_text("LU1ÁBC")
+
+    def test_pmt_text_to_string_reads_freedv_symbols(self):
+        self.assertEqual(pmt_text_to_string(pmt.intern("LU1ABC")), "LU1ABC")
 
 
 class PttStateMachineTest(unittest.TestCase):
