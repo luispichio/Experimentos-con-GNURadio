@@ -159,9 +159,15 @@ espectro de voz de micrófono y FreeDV demodulado está desactivado temporalment
 mientras se diagnostica un posible bloqueo del scheduler con interfaces ALSA
 reales.
 
-Actualmente la mensajería de texto FreeDV está desactivada temporalmente para
-aislar un posible problema de estabilidad al iniciar el audio. El argumento
-`--tx-text` queda reservado para cuando se reactive.
+El campo **Indicativo / texto TX** transmite cíclicamente texto ASCII de hasta
+80 caracteres, por ejemplo indicativo y ubicación. El historial **Texto RX
+FreeDV** muestra los mensajes recibidos. El texto TX se aplica al iniciar audio;
+para cambiarlo, detén e inicia nuevamente el audio.
+
+La aplicación guarda interfaces de audio, puerto PTT seleccionado, ganancias,
+squelch, texto TX, tamaño de ventana y divisores. El puerto PTT sólo se recuerda:
+no se reconecta automáticamente al abrir. Los argumentos explícitos de la línea
+de comandos tienen prioridad sobre la configuración guardada.
 
 Si el audio y el espectro se detienen mientras la UI permanece activa, ejecuta
 con `--debug-flowgraph` desde una terminal para mostrar la excepción del

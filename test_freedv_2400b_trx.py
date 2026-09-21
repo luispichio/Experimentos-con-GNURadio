@@ -10,7 +10,9 @@ import pmt
 
 from freedv_2400b_trx import (
     DtrPtt,
+    FreeDVTextReceiver,
     PttStateMachine,
+    argument_parser,
     discover_alsa_device_details,
     discover_alsa_devices,
     MAX_FREEDV_TEXT_LENGTH,
@@ -178,6 +180,18 @@ class FreeDVTextTest(unittest.TestCase):
 
     def test_pmt_text_to_string_reads_freedv_symbols(self):
         self.assertEqual(pmt_text_to_string(pmt.intern("LU1ABC")), "LU1ABC")
+
+    def test_receiver_keeps_a_bounded_message_queue(self):
+        receiver = FreeDVTextReceiver(max_messages=2)
+        receiver._handle_message(pmt.intern("LU1AAA"))
+        receiver._handle_message(pmt.intern("LU1BBB"))
+        receiver._handle_message(pmt.intern("LU1CCC"))
+        self.assertEqual(receiver.drain(), ["LU1BBB", "LU1CCC"])
+
+    def test_cli_audio_and_text_defaults_do_not_override_settings(self):
+        options = argument_parser().parse_args([])
+        self.assertIsNone(options.mic_in)
+        self.assertIsNone(options.tx_text)
 
 
 class PttStateMachineTest(unittest.TestCase):
