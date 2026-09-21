@@ -154,12 +154,18 @@ ancho de ambos paneles. En pantallas más bajas, la columna de
 controles permite desplazamiento y el ajuste del umbral de squelch se despliega
 con el botón **Umbral**.
 
-El panel derecho muestra dos espectros ajustables: la señal intercambiada con
-el HT y la voz de micrófono junto con la voz FreeDV demodulada. El campo
-**Texto TX FreeDV** transmite cíclicamente un texto ASCII de hasta 80 caracteres
-(por ejemplo, indicativo y ubicación). El historial **Texto RX FreeDV** muestra
-los mensajes recibidos. El texto TX se aplica al iniciar audio; para cambiarlo,
-detén e inicia nuevamente el audio.
+El panel derecho muestra el espectro de la señal intercambiada con el HT. El
+espectro de voz de micrófono y FreeDV demodulado está desactivado temporalmente
+mientras se diagnostica un posible bloqueo del scheduler con interfaces ALSA
+reales.
+
+Actualmente la mensajería de texto FreeDV está desactivada temporalmente para
+aislar un posible problema de estabilidad al iniciar el audio. El argumento
+`--tx-text` queda reservado para cuando se reactive.
+
+Si el audio y el espectro se detienen mientras la UI permanece activa, ejecuta
+con `--debug-flowgraph` desde una terminal para mostrar la excepción del
+scheduler GNU Radio.
 
 También se pueden preseleccionar desde la línea de comandos:
 
